@@ -1,5 +1,6 @@
 
 from pathlib import Path
+from types import SimpleNamespace
 from rich.console import Console
 from rich.panel import Panel
 from rich.text import Text
@@ -16,6 +17,7 @@ from interface.arabic_text import ArabicText
 from player.audio_player import AudioPlayer
 from commands.intent_parser import IntentParser
 from voice.voice_agent import VoiceAgent
+from ai_agent import TaysirAIAgent
 
 
 BASE_DIR = Path(__file__).resolve().parents[1]
@@ -46,6 +48,7 @@ MENU_OPTIONS = [
     ("11", "إيقاف التلاوة"),
     ("12", "الوكيل الذكي — أمر باللغة العربية"),
     ("13", "الوكيل الصوتي — التحدث باللغة العربية"),
+    ("14", "وكيل الذكاء الاصطناعي — محادثة كتابة وصوت"),
     ("0", "خروج"),
 ]
 
@@ -167,6 +170,33 @@ def build_surah_names(quran):
 
     return names
 
+def command_requests_audio(command: str) -> bool:
+    """Check whether the user explicitly requested audio playback."""
+
+    if not command:
+        return False
+
+    normalized = (
+        command.strip()
+        .replace("أ", "ا")
+        .replace("إ", "ا")
+        .replace("آ", "ا")
+        .replace("ى", "ي")
+    )
+
+    audio_phrases = (
+        "اقرا",
+        "تلاوه",
+        "شغل التلاوه",
+        "اسمعني",
+        "استمع",
+        "ابغى اسمع",
+        "ابي اسمع",
+        "اريد سماع",
+        "شغل الصوت",
+    )
+
+    return any(phrase in normalized for phrase in audio_phrases)
 
 def handle_smart_command(
     console,
@@ -177,46 +207,37 @@ def handle_smart_command(
     current_surah,
     current_ayah,
     command=None,
+    intent_override=None,
     voice_agent=None,
 ):
-    # إذا لم يصل أمر جاهز، نطلبه من المستخدم كتابةً.
     if command is None:
         command = console.input(
             f"\n[bold cyan]{ArabicText('اكتب أمرك لتيسير: ')}[/]"
         ).strip()
 
     if not command:
+        show_message(console, "لم يتم إدخال أي أمر.", "yellow")
+        return current_surah, current_ayah
+
+    intent = (
+        intent_override
+        if intent_override is not None
+        else parser.parse(command)
+    )
+
+    if intent.action == "unknown":
         show_message(
             console,
-            "لم يتم إدخال أي أمر.",
+            "لم أفهم الأمر. جرّب: الآية التالية، اعرض التفسير، "
+            "انتقل إلى سورة الملك الآية 5، أو ابحث عن الحمد لله.",
             "yellow",
         )
         return current_surah, current_ayah
 
-    # نرسل النص كما هو إلى محلل الأوامر.
-    command = normalize_digits(command)
-    intent = parser.parse(command)
-    response = ""
-
-    if intent.action == "unknown":
-        response = (
-            "لم أفهم الأمر. جرّب الآية التالية، أو اعرض التفسير، "
-            "أو انتقل إلى سورة الملك الآية 5، أو ابحث عن الحمد لله."
-        )
-        show_message(console, response, "yellow")
-        if voice_agent is not None:
-            try:
-                voice_agent.speak(response)
-            except Exception as error:
-                show_message(console, f"تعذرت الاستجابة الصوتية: {error}", "yellow")
-        return current_surah, current_ayah
-
     if intent.action == "read":
-        item = show_current_ayah(
+        show_current_ayah(
             console, quran, current_surah, current_ayah
         )
-        if item:
-            response = item.get("text", "")
 
     elif intent.action == "next":
         if quran.find(current_surah, current_ayah + 1):
@@ -230,21 +251,35 @@ def handle_smart_command(
             ):
                 next_surah += 1
 
-            if next_surah <= 114:
-                current_surah = next_surah
-                current_ayah = 1
-            else:
+            if next_surah > 114:
                 show_message(
                     console,
                     "وصلت إلى نهاية القرآن الكريم.",
                 )
                 return current_surah, current_ayah
 
-        item = show_current_ayah(
+            current_surah = next_surah
+            current_ayah = 1
+
+        # عرض الآية الجديدة
+        show_current_ayah(
+            console,
+            quran,
+            current_surah,
+            current_ayah,
+        )
+
+        # تشغيل التلاوة فقط إذا طلب المستخدم القراءة الصوتية
+        if command_requests_audio(command):
+            player.play_ayah(
+                current_surah,
+                current_ayah,
+                repeats=1,
+            )
+
+        show_current_ayah(
             console, quran, current_surah, current_ayah
         )
-        if item:
-            response = item.get("text", "")
 
     elif intent.action == "previous":
         if current_ayah > 1:
@@ -259,113 +294,284 @@ def handle_smart_command(
             ):
                 previous_surah -= 1
 
-            ayahs = quran.get_surah(previous_surah)
+            previous_ayahs = quran.get_surah(previous_surah)
 
-            if ayahs:
+            if previous_ayahs:
                 current_surah = previous_surah
-                current_ayah = ayahs[-1]["ayah_number"]
+                current_ayah = previous_ayahs[-1]["ayah_number"]
 
         else:
             show_message(
-                console,
-                "أنت في بداية القرآن الكريم.",
-                "yellow",
+                console, "أنت في بداية القرآن الكريم.", "yellow"
             )
             return current_surah, current_ayah
 
-        item = show_current_ayah(
+        show_current_ayah(
             console, quran, current_surah, current_ayah
         )
-        if item:
-            response = item.get("text", "")
 
     elif intent.action == "goto":
-        if intent.surah is None or intent.ayah is None:
+        surah = getattr(intent, "surah", None)
+        ayah = getattr(intent, "ayah", None)
+
+        if surah is None or ayah is None:
             show_message(
                 console,
-                "حدّد السورة والآية، مثل: "
-                "انتقل إلى سورة الملك الآية 5.",
+                "حدّد السورة والآية، مثل: انتقل إلى سورة الملك الآية 5.",
                 "yellow",
             )
             return current_surah, current_ayah
 
-        item = quran.find(intent.surah, intent.ayah)
+        try:
+            surah = int(surah)
+            ayah = int(ayah)
+        except (TypeError, ValueError):
+            show_message(
+                console, "رقم السورة أو الآية غير صحيح.", "yellow"
+            )
+            return current_surah, current_ayah
+
+        item = quran.find(surah, ayah)
 
         if item is None:
             show_message(
-                console,
-                "السورة أو الآية غير موجودة.",
-                "yellow",
+                console, "السورة أو الآية غير موجودة.", "yellow"
             )
             return current_surah, current_ayah
 
-        current_surah = intent.surah
-        current_ayah = intent.ayah
+        current_surah = surah
+        current_ayah = ayah
 
         show_ayah(console, item)
-        response = item.get("text", "")
+
+        # تشغيل التلاوة إذا طلب المستخدم سماع الآية.
+        normalized_command = (
+            command.replace("أ", "ا")
+            .replace("إ", "ا")
+            .replace("آ", "ا")
+            .replace("ى", "ي")
+        )
+
+        audio_phrases = (
+            "اقرا",
+            "اقرأ",
+            "تلاوة",
+            "شغل التلاوة",
+            "اسمعني",
+            "استمع",
+            "ابغى اسمع",
+            "أبي أسمع",
+            "اريد سماع",
+        )
+
+        if any(phrase in normalized_command for phrase in audio_phrases):
+            player.play_ayah(
+                current_surah,
+                current_ayah,
+                repeats=1,
+            )
 
     elif intent.action == "tafsir":
-        show_tafsir(console, tafsir, current_surah, current_ayah)
-        tafsir_text = tafsir.get(current_surah, current_ayah)
-        if isinstance(tafsir_text, str):
-            response = tafsir_text
-        elif isinstance(tafsir_text, dict):
-            response = (
-                tafsir_text.get("text")
-                or tafsir_text.get("tafsir")
-                or "تم عرض التفسير على الشاشة."
-            )
-        else:
-            response = "تم عرض التفسير على الشاشة."
+        show_tafsir(
+            console, tafsir, current_surah, current_ayah
+        )
 
     elif intent.action == "repeat":
-        item = show_current_ayah(
+        show_current_ayah(
             console, quran, current_surah, current_ayah
         )
-        if item:
-            response = item.get("text", "")
 
     elif intent.action == "search":
-        search_ayahs(console, quran, intent.query)
-        response = "تم تنفيذ البحث في القرآن الكريم."
+        search_ayahs(
+            console, quran, getattr(intent, "query", None)
+        )
 
     elif intent.action == "play_ayah":
-        player.play_ayah(current_surah, current_ayah, repeats=1)
-        response = "تم طلب تشغيل الآية الحالية."
+        player.play_ayah(
+            current_surah, current_ayah, repeats=1
+        )
 
     elif intent.action == "play_surah":
-        player.play_surah(quran.get_surah(current_surah))
-        response = "تم طلب تشغيل السورة الحالية."
+        player.play_surah(
+            quran.get_surah(current_surah)
+        )
 
     elif intent.action == "stop":
         player.stop()
-        response = "تم طلب إيقاف التلاوة."
-        show_message(console, response)
+        show_message(console, "تم طلب إيقاف التلاوة.")
 
     elif intent.action == "help":
         show_help(console)
-        response = (
-            "يمكنك طلب قراءة الآية، أو الانتقال للآية التالية، "
-            "أو عرض التفسير، أو البحث في القرآن الكريم."
-        )
 
     elif intent.action == "exit":
-        response = "للخروج من البرنامج، اختر صفر من القائمة الرئيسية."
-        show_message(console, response, "yellow")
-
-    if voice_agent is not None and response:
-        try:
-            voice_agent.speak(str(response))
-        except Exception as error:
-            show_message(
-                console,
-                f"تعذرت الاستجابة الصوتية: {error}",
-                "yellow",
-            )
+        show_message(
+            console,
+            "للخروج من البرنامج، اختر 0 من القائمة الرئيسية.",
+            "yellow",
+        )
 
     return current_surah, current_ayah
 
+
+
+def run_ai_agent_chat(
+    console,
+    quran,
+    tafsir,
+    player,
+    parser,
+    current_surah,
+    current_ayah,
+    voice_agent=None,
+):
+    """محادثة تيسير مع نموذج OpenAI: كتابة أو صوت، مع تنفيذ أوامر التطبيق محليًا."""
+    try:
+        ai_agent = TaysirAIAgent()
+    except Exception as error:
+        show_message(
+            console,
+            f"تعذّر تشغيل وكيل الذكاء الاصطناعي: {error}",
+            "red",
+        )
+        return current_surah, current_ayah, voice_agent
+
+    show_message(
+        console,
+        "بدأت محادثة تيسير الذكية. اختر كتابة أو صوت، واكتب (خروج) لإنهاء المحادثة.",
+        "green",
+    )
+
+    while True:
+        mode = console.input(
+            f"\n[bold cyan]{ArabicText('طريقة الإدخال: 1 كتابة | 2 صوت | 0 إنهاء المحادثة: ')}[/]"
+        ).strip()
+        mode = normalize_digits(mode)
+
+        if mode == "0":
+            show_message(console, "انتهت المحادثة، يمكنك متابعة استخدام تيسير.")
+            break
+
+        if mode == "1":
+            user_text = console.input(
+                f"[bold cyan]{ArabicText('أنت: ')}[/]"
+            ).strip()
+            if user_text in {"خروج", "انهاء", "إنهاء", "exit", "quit"}:
+                break
+
+        elif mode == "2":
+            try:
+                if voice_agent is None:
+                    voice_agent = VoiceAgent()
+                show_message(console, "تحدث الآن باللغة العربية لمدة 6 ثوانٍ...")
+                user_text = ai_agent.listen()
+                if not user_text:
+                    show_message(console, "لم أتمكن من فهم الصوت. حاول مرة أخرى.", "yellow")
+                    continue
+                console.print(
+                    f"[bold green]{ArabicText('سمعتك تقول:')}[/] "
+                    f"{ArabicText(user_text)}"
+                )
+            except Exception as error:
+                show_message(
+                    console,
+                    f"تعذّر تسجيل الصوت أو تحويله إلى نص: {error}. يمكنك اختيار الكتابة بدلًا من ذلك.",
+                    "yellow",
+                )
+                continue
+        else:
+            show_message(console, "اختر 1 للكتابة أو 2 للصوت أو 0 للإنهاء.", "yellow")
+            continue
+
+        if not user_text:
+            continue
+
+        try:
+            result = ai_agent.understand(
+                user_text=user_text,
+                current_surah=current_surah,
+                current_ayah=current_ayah,
+                surah_names=build_surah_names(quran),
+            )
+        except Exception as error:
+            message = f"تعذّر الاتصال بخدمة الذكاء الاصطناعي: {error}"
+            show_message(console, message, "red")
+            if voice_agent is not None:
+                try:
+                    voice_agent.speak("تعذر الاتصال بخدمة الذكاء الاصطناعي. تحقق من الاتصال ومفتاح API.")
+                except Exception:
+                    pass
+            continue
+
+        action = result.get("action", "chat")
+        reply = (result.get("reply") or "").strip()
+
+        if action == "exit":
+            show_message(console, "انتهت المحادثة، يمكنك متابعة استخدام تيسير.")
+            break
+
+        if action == "chat":
+            if not reply:
+                reply = "أنا مساعد تيسير. أستطيع مساعدتك في قراءة القرآن والتنقل بين الآيات والتفسير والبحث والتلاوة."
+            console.print(
+                Panel(
+                    Text(ArabicText(reply), justify="right"),
+                    title=ArabicText("تيسير الذكي"),
+                    border_style="cyan",
+                    padding=(1, 2),
+                )
+            )
+            if voice_agent is not None:
+                try:
+                    voice_agent.speak(reply)
+                except Exception:
+                    pass
+            continue
+
+        # لا نسمح للنموذج بتشغيل كود؛ بل يختار فقط إجراءً معروفًا،
+        # ثم ينفذ البرنامج الوظيفة المحلية الموجودة أصلًا.
+        intent = SimpleNamespace(
+            action=action,
+            surah=result.get("surah"),
+            ayah=result.get("ayah"),
+            query=result.get("query", ""),
+        )
+
+        if action == "goto":
+            surah = intent.surah
+            ayah = intent.ayah
+            if not isinstance(surah, int) or not isinstance(ayah, int):
+                clarification = reply or "ما رقم السورة ورقم الآية التي تريد الانتقال إليهما؟"
+                show_message(console, clarification, "yellow")
+                if voice_agent is not None:
+                    try:
+                        voice_agent.speak(clarification)
+                    except Exception:
+                        pass
+                continue
+            if quran.find(surah, ayah) is None:
+                clarification = "رقم السورة أو الآية غير صحيح. وضّح السورة والآية من فضلك."
+                show_message(console, clarification, "yellow")
+                if voice_agent is not None:
+                    try:
+                        voice_agent.speak(clarification)
+                    except Exception:
+                        pass
+                continue
+
+        current_surah, current_ayah = handle_smart_command(
+            console,
+            parser,
+            quran,
+            tafsir,
+            player,
+            current_surah,
+            current_ayah,
+            command=user_text,
+            voice_agent=voice_agent,
+            intent_override=intent,
+        )
+
+    return current_surah, current_ayah, voice_agent
 
 def run_cli():
     console = Console()
@@ -627,33 +833,45 @@ def run_cli():
                             )
                         )
 
-                        current_surah, current_ayah = (
-                            handle_smart_command(
-                                console,
-                                parser,
-                                quran,
-                                tafsir,
-                                player,
-                                current_surah,
-                                current_ayah,
-                                command=recognized_text,
-                                voice_agent=voice_agent,
-                            )
+                        current_surah, current_ayah = handle_smart_command(
+                            console,
+                            parser,
+                            quran,
+                            tafsir,
+                            player,
+                            current_surah,
+                            current_ayah,
+                            command=recognized_text,
+                            voice_agent=voice_agent,
                         )
-
                     else:
                         show_message(
                             console,
                             "لم يتم التعرف على الأمر. حاول مرة أخرى.",
                             "yellow",
                         )
-
                 except Exception as error:
                     show_message(
                         console,
                         f"تعذّر تشغيل الوكيل الصوتي: {error}",
                         "red",
                     )
+
+            elif choice == "14":
+                (
+                    current_surah,
+                    current_ayah,
+                    voice_agent,
+                ) = run_ai_agent_chat(
+                    console,
+                    quran,
+                    tafsir,
+                    player,
+                    parser,
+                    current_surah,
+                    current_ayah,
+                    voice_agent=voice_agent,
+                )
 
             else:
                 show_message(
