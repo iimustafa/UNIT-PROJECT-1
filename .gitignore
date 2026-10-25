@@ -28,3 +28,25 @@ data/audio_cache/
 build/
 dist/
 *.egg-info/
+
+# Additional local virtual environment
+.venv-najdi-tts/
+
+# Local shell configuration and backups
+.zshrc
+*.bak
+*.backup
+
+# Temporary Najdi TTS recordings and outputs
+najdi_reference.m4a
+najdi_reference.wav
+najdi_test.wav
+najdi_test_output.wav
+test_arabic_pronunciation.py
+test_greeting_pronunciation.py
+test_najdi_voice.py
+test_saudi_tts.py
+test_suwar.py
+
+# Local Hugging Face cache
+najdi_model/.cache/

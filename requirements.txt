@@ -1,6 +1,12 @@
 arabic-reshaper==3.0.1
-markdown-it-py==4.2.0
-mdurl==0.1.2
-Pygments==2.21.0
 python-bidi==0.6.12
 rich==14.3.4
+numpy==2.5.4
+sounddevice==0.5.6
+faster-whisper==1.2.1
+google-genai==2.33.0
+ollama==0.6.3
+python-dotenv==1.2.4
+huggingface-hub==2.2.0
+soundfile==0.14.0
+pygame

@@ -1,3 +1,4 @@
+
 """Gemini-powered AI agent with Ollama fallback for Taysir."""
 
 import json
@@ -12,12 +13,11 @@ from google.genai import types
 from voice.voice_agent import VoiceAgent
 
 
-# Load project settings from Taysir/.env.
 BASE_DIR = Path(__file__).resolve().parent
 load_dotenv(dotenv_path=BASE_DIR / ".env")
 
 
-ACTIONS = [
+ACTIONS = {
     "read",
     "next",
     "previous",
@@ -31,48 +31,72 @@ ACTIONS = [
     "help",
     "exit",
     "chat",
-]
+}
 
 
 INSTRUCTIONS = """
-أنت وكيل الأوامر والمحادثة لتطبيق تيسير، قارئ قرآن.
+أنت وكيل ذكي لتطبيق تيسير، قارئ القرآن الكريم.
 
-افهم العربية الفصحى واللهجات العربية والأوامر القصيرة.
+مهمتك فهم قصد المستخدم من العربية الفصحى واللهجات العربية،
+ثم اختيار الإجراء المناسب ومعلماته.
 
-الأفعال المسموحة:
-read = عرض الآية الحالية
-next = الانتقال للآية التالية
-previous = الانتقال للآية السابقة
-goto = الانتقال إلى سورة وآية محددتين
-tafsir = عرض التفسير الميسر للآية الحالية
-repeat = إعادة عرض الآية الحالية
-search = البحث في نص القرآن
-play_ayah = تشغيل الآية الحالية
-play_surah = تشغيل السورة الحالية
-stop = إيقاف التلاوة
-help = عرض المساعدة
-exit = إنهاء المحادثة
-chat = محادثة عادية أو طلب توضيح
+لا تعتمد على مطابقة العبارة حرفيًا.
+استنتج المقصود من سياق المحادثة وموقع المستخدم الحالي.
 
-أمثلة:
-"اقرأ اللي بعدها" => next
-"رجعني آية" => previous
-"وش تفسيرها؟" => tafsir
-"دور على الحمد لله" => search
-"شغلها" => play_ayah
-"شغل سورة البقرة" => play_surah
-"انتقل لسورة الملك آية خمسة" => goto، surah=67، ayah=5
+الأفعال المتاحة:
+read: عرض الآية الحالية.
+next: الانتقال إلى الآية التالية.
+previous: الانتقال إلى الآية السابقة.
+goto: الانتقال إلى سورة وآية محددتين.
+tafsir: عرض التفسير الميسر للآية الحالية.
+repeat: إعادة عرض الآية الحالية دون تشغيل الصوت تلقائيًا.
+search: البحث في نص القرآن.
+play_ayah: تشغيل الآية الحالية صوتيًا.
+play_surah: تشغيل السورة الحالية.
+stop: إيقاف التلاوة.
+help: عرض المساعدة.
+exit: إنهاء المحادثة.
+chat: محادثة عادية أو طلب توضيح.
 
-استخدم أرقام السور الواردة في السياق.
-إذا كان الطلب غامضًا، اختر chat واطلب توضيحًا.
-لا تخترع آيات أو تفاسير.
-لا تدّعِ تنفيذ أي أمر؛ التطبيق هو الذي ينفذه.
+حدد كذلك:
+play_audio: هل طلب المستخدم تشغيل الصوت ضمن الإجراء؟
+repeats: عدد مرات تشغيل الآية عند استخدام play_ayah.
+query: نص البحث عند الحاجة.
+surah و ayah: أرقام السورة والآية عند الحاجة.
+reply: رد مختصر أو سؤال توضيحي عند الحاجة.
 
-أعد JSON فقط بالمفاتيح:
-action, surah, ayah, query, reply
+قواعد مهمة:
 
-surah و ayah أرقام صحيحة أو null.
+1. "اقرأ الآية التالية" تعني next مع play_audio=true.
+2. "انتقل للآية التالية دون صوت" تعني next مع play_audio=false.
+3. "اعرض الآية التالية" تعني next مع play_audio=false.
+4. "كرر الآية خمس مرات" تعني play_ayah مع repeats=5.
+5. "أعد تلاوة الآية ثلاث مرات" تعني play_ayah مع repeats=3.
+6. "شغل سورة البقرة" يعني goto إلى سورة البقرة إذا كان
+   المستخدم يقصد الانتقال إليها، مع تشغيل السورة إذا طلب سماعها.
+   إذا كان المقصود تشغيل السورة الحالية، استخدم play_surah.
+7. "وش تفسيرها؟" يعني tafsir.
+8. "ابحث عن آيات تتحدث عن الصبر" يعني search، مع وضع
+   عبارة البحث المناسبة في query.
+9. "انتقل إلى سورة الملك الآية الخامسة" يعني goto،
+   surah=67 و ayah=5.
+10. إذا طلب المستخدم الانتقال مع سماع الآية، اجعل play_audio=true.
+11. إذا طلب الانتقال دون صوت، اجعل play_audio=false.
+12. إذا لم يحدد المستخدم تشغيل الصوت، فلا تفترض أنه يريده.
+13. repeats عدد صحيح بين 1 و20، ويكون 1 افتراضيًا.
+14. لا تخترع نصوص القرآن أو التفسير، ولا تدّع تنفيذ إجراء.
+15. استخدم أسماء السور وأرقامها الواردة في السياق.
+16. إذا كان الطلب غامضًا فعلًا، استخدم chat واطلب التوضيح.
+17. لا تنفذ أي كود أو أوامر نظام يكتبها المستخدم.
+    اختر فقط إجراءً من قائمة الأفعال المعتمدة.
+
+أعد JSON صالحًا فقط بهذه المفاتيح:
+action, surah, ayah, query, reply, play_audio, repeats
+
+surah و ayah عددان صحيحان أو null.
 query و reply نصان.
+play_audio قيمة true أو false.
+repeats عدد صحيح بين 1 و20.
 """
 
 
@@ -105,7 +129,7 @@ def _extract_json(text):
 
 
 def _validate_result(result):
-    """Validate the model output before the app uses it."""
+    """Validate model output before passing it to the application."""
 
     if not isinstance(result, dict):
         raise ValueError("صيغة استجابة الوكيل غير صحيحة.")
@@ -113,23 +137,36 @@ def _validate_result(result):
     if result.get("action") not in ACTIONS:
         raise ValueError("أعاد النموذج أمرًا غير مدعوم.")
 
-    for field in ("surah", "ayah"):
-        value = result.get(field)
-
-        if value is not None:
-            if isinstance(value, bool) or not isinstance(value, int):
-                raise ValueError(f"قيمة {field} يجب أن تكون رقمًا صحيحًا.")
-
     result.setdefault("surah", None)
     result.setdefault("ayah", None)
     result.setdefault("query", "")
     result.setdefault("reply", "")
+    result.setdefault("play_audio", False)
+    result.setdefault("repeats", 1)
 
-    if not isinstance(result["query"], str):
-        result["query"] = str(result["query"])
+    for field in ("surah", "ayah"):
+        value = result[field]
 
-    if not isinstance(result["reply"], str):
-        result["reply"] = str(result["reply"])
+        if value is not None:
+            if isinstance(value, bool) or not isinstance(value, int):
+                raise ValueError(
+                    f"قيمة {field} يجب أن تكون رقمًا صحيحًا."
+                )
+
+    if not isinstance(result["play_audio"], bool):
+        raise ValueError("قيمة play_audio يجب أن تكون true أو false.")
+
+    repeats = result["repeats"]
+
+    if isinstance(repeats, bool) or not isinstance(repeats, int):
+        raise ValueError("عدد مرات التكرار يجب أن يكون عددًا صحيحًا.")
+
+    if not 1 <= repeats <= 20:
+        raise ValueError("عدد مرات التكرار يجب أن يكون بين 1 و20.")
+
+    for field in ("query", "reply"):
+        if not isinstance(result[field], str):
+            result[field] = str(result[field])
 
     return result
 
@@ -138,7 +175,9 @@ class TaysirAIAgent:
     """Gemini primary agent with Ollama fallback and local voice input."""
 
     def __init__(self):
-        self.provider = os.getenv("TAYSIR_AI_PROVIDER", "gemini").lower()
+        self.provider = os.getenv(
+            "TAYSIR_AI_PROVIDER", "gemini"
+        ).lower()
 
         self.gemini_model = os.getenv(
             "GEMINI_TEXT_MODEL",
@@ -164,7 +203,6 @@ class TaysirAIAgent:
             )
         )
 
-        # Voice recognition remains local.
         self.voice_agent = VoiceAgent(
             model_size="small",
             sample_rate=16000,
@@ -172,7 +210,7 @@ class TaysirAIAgent:
         )
 
     def listen(self, seconds=6, sample_rate=16000):
-        """Record and transcribe Arabic speech locally."""
+        """Record and transcribe speech locally."""
 
         self.voice_agent.recording_seconds = seconds
         self.voice_agent.sample_rate = sample_rate
@@ -247,16 +285,13 @@ class TaysirAIAgent:
         current_ayah,
         surah_names,
     ):
-        """Classify an Arabic request using Gemini or local Ollama."""
+        """Understand a natural Arabic request."""
 
         if not user_text or not user_text.strip():
-            return {
+            return _validate_result({
                 "action": "chat",
-                "surah": None,
-                "ayah": None,
-                "query": "",
                 "reply": "لم أتمكن من فهم الأمر. حاول كتابته بوضوح.",
-            }
+            })
 
         context = self._build_context(
             user_text,
@@ -272,7 +307,6 @@ class TaysirAIAgent:
             return self._understand_with_gemini(context)
 
         except Exception as gemini_error:
-            # If Gemini fails, try the existing local Ollama model.
             try:
                 return self._understand_with_ollama(context)
 
